@@ -1,0 +1,10 @@
+[package]
+name = "prometheus"
+version = "0.1.0"
+authors = ["lholznagel <github@lholznagel.info>"]
+
+[dependencies]
+prometheus = "0.3.5"
+hyper = "0.11.9"
+lazy_static = "1.0.0"
+futures = "0.1.17"
