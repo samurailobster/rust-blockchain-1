@@ -1,5 +1,6 @@
 target/
 */target/
 **/*.rs.bk
+.idea
 
 connection_manager/peers

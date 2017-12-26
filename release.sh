@@ -1,6 +1,6 @@
 #!/bin/sh
 
-FILES=$(find target/release -maxdepth 1 -name "blockchain_*" -executable)
+FILES=$(find target/release -maxdepth 1 -name "blockchain_*" -perm +111 -type f)
 
 for file in $FILES
 do
