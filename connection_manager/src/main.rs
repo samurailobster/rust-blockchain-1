@@ -11,15 +11,13 @@ extern crate blockchain_hooks;
 extern crate blockchain_logging;
 extern crate blockchain_network;
 extern crate blockchain_protocol;
+extern crate time;
 
 mod handlers;
-mod block_handler;
 
 use blockchain_file::peers::KnownPeers;
 use blockchain_hooks::HookRegister;
 use blockchain_network::udp_client::UdpClientBuilder;
-
-use std::thread;
 
 /// Starting point
 ///
@@ -28,20 +26,15 @@ fn main() {
     KnownPeers::init();
     info!("Starting hole puncher!");
 
+    let hook_handler = handlers::HookHandlers::new();
+
     let hook_notification = HookRegister::new()
-        .set_hook(handlers::HookHandlers)
+        .set_hook(hook_handler)
         .get_notification();
 
     let udp = UdpClientBuilder::new()
         .set_port(45000)
         .build(hook_notification);
-
-    info!("After udp");
-
-    let local_udp = udp.connection();
-    thread::spawn(move || {
-        block_handler::handle_block(local_udp);
-    });
 
     udp.listen();
 }

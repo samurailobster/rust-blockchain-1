@@ -19,13 +19,13 @@ pub struct NewBlockPayload {
 }
 
 impl NewBlockPayload {
-    /// Generates a genesis block
-    pub fn genesis() -> Self {
+    /// Next block
+    pub fn block(index: u64, prev: String) -> Self {
         NewBlockPayload {
-            index: 0,
+            index: index,
             content: String::from(""),
             timestamp: get_time().sec,
-            prev: String::from("0".repeat(64)),
+            prev: prev,
             sign_key: String::from("0".repeat(4))
         }
     }
@@ -51,7 +51,7 @@ impl NewBlockPayload {
 
 impl PayloadModel for NewBlockPayload {
     fn new() -> Self {
-        NewBlockPayload {
+        Self {
             index: 0,
             content: String::from(""),
             timestamp: get_time().sec,
@@ -62,7 +62,7 @@ impl PayloadModel for NewBlockPayload {
 
     fn parse(bytes: Vec<&[u8]>) -> Self {
         if bytes.len() > 0 {
-            NewBlockPayload {
+            Self {
                 index: String::from(str::from_utf8(bytes[0]).unwrap()).parse::<u64>().unwrap(),
                 content: String::from(str::from_utf8(bytes[1]).unwrap()),
                 timestamp: String::from(str::from_utf8(bytes[2]).unwrap()).parse::<i64>().unwrap(),
@@ -70,7 +70,7 @@ impl PayloadModel for NewBlockPayload {
                 sign_key: String::from(str::from_utf8(bytes[4]).unwrap())
             }
         } else {
-            NewBlockPayload::new()
+            Self::new()
         }
     }
 

@@ -1,15 +1,72 @@
 use blockchain_file::peers::{KnownPeers, Peer};
 use blockchain_hooks::Hooks;
 use blockchain_protocol::enums::status::StatusCodes;
-use blockchain_protocol::payload::{PayloadModel, RegisterAckPayload, RegisterPayload, PeerRegisteringPayload};
+use blockchain_protocol::payload::{FoundBlockPayload, NewBlockPayload, PayloadModel, RegisterAckPayload, PossibleBlockPayload, RegisterPayload, PeerRegisteringPayload, ValidateHash, ValidatedHash};
 use blockchain_hooks::EventCodes;
 use blockchain_protocol::BlockchainProtocol;
-use std::net::{UdpSocket, SocketAddr};
 
-pub struct HookHandlers;
+use std::net::{UdpSocket, SocketAddr};
+use std::collections::HashMap;
+use time::get_time;
+
+pub struct HookHandlers {
+    connected_peers_addr: Vec<String>,
+    current_block: PossibleBlockPayload,
+    hashes: Vec<String>,
+    validation_in_progress: bool,
+    last_block_time: i64
+}
+
+impl HookHandlers {
+    pub fn new() -> Self {
+        Self {
+            connected_peers_addr: Vec::new(),
+            current_block: PossibleBlockPayload::new(),
+            hashes: Vec::new(),
+            validation_in_progress: false,
+            last_block_time: 0
+        }
+    }
+
+    fn send_genesis(&mut self, udp: &UdpSocket) {
+        let payload = NewBlockPayload::block(0, String::from("0".repeat(64)));
+        self.last_block_time = payload.timestamp;
+        self.validation_in_progress = false;
+
+        let message = BlockchainProtocol::new()
+            .set_event_code(EventCodes::NewBlock)
+            .set_payload(payload)
+            .build();
+
+        for peer in self.connected_peers_addr.clone() {
+            udp.send_to(
+                message.as_slice(),
+                peer.parse::<SocketAddr>().unwrap(),
+            ).unwrap();
+        }
+    }
+
+    fn send_next_block(&mut self, udp: &UdpSocket) {
+        let payload = NewBlockPayload::block(self.current_block.index + 1, self.current_block.hash.clone());
+        self.last_block_time = payload.timestamp;
+        self.validation_in_progress = false;
+
+        let message = BlockchainProtocol::new()
+            .set_event_code(EventCodes::NewBlock)
+            .set_payload(payload)
+            .build();
+
+        for peer in self.connected_peers_addr.clone() {
+            udp.send_to(
+                message.as_slice(),
+                peer.parse::<SocketAddr>().unwrap(),
+            ).unwrap();
+        }
+    }
+}
 
 impl Hooks for HookHandlers {
-    /// # What does it do?
+    /// # Hole puncher
     ///
     /// - Create a "hole" between to peers
     /// - When a peer registers itself, its IP-Address + Port are saved
@@ -55,13 +112,12 @@ impl Hooks for HookHandlers {
     /// - The connection between both networks should be good to go
     ///
     /// Handles a new peer
-    fn on_register(&self, udp: &UdpSocket, payload_buffer: Vec<u8>, source: String) -> Vec<u8> {
+    fn on_register(&mut self, udp: &UdpSocket, payload_buffer: Vec<u8>, source: String) -> Vec<u8> {
         let register_payload = BlockchainProtocol::<RegisterPayload>::from_vec(payload_buffer);
         let last_peer = KnownPeers::get_latest();
         let mut status = StatusCodes::Ok;
 
         if last_peer.get_name() == "" {
-            error!("Empty last peer");
             status = StatusCodes::NoPeer;
         } else {
             let payload = PeerRegisteringPayload::new().set_addr(source.to_string());
@@ -73,6 +129,11 @@ impl Hooks for HookHandlers {
         }
 
         KnownPeers::new(Peer::new(register_payload.payload.name(), source.to_string())).save();
+        self.connected_peers_addr.push(source.to_string());
+
+        if self.connected_peers_addr.len() >= 3 && self.current_block.index == 0 {
+            self.send_genesis(&udp);
+        }
 
         let payload = RegisterAckPayload::new().set_addr(String::from(last_peer.get_socket()));
         sending!(format!("ACK_REGISTER | {:?}", payload));
@@ -83,11 +144,105 @@ impl Hooks for HookHandlers {
             .build()
     }
 
+    fn on_possible_block(&mut self, udp: &UdpSocket, payload_buffer: Vec<u8>, _: String) -> Vec<u8> {
+        let message = BlockchainProtocol::<PossibleBlockPayload>::from_vec(payload_buffer);
+        self.current_block = message.payload.clone();
+
+        if self.current_block.index > message.payload.index {
+            self.validation_in_progress = false;
+        }
+
+        event!(format!("POSSIBLE_BLOCK | {:?}", message));
+
+        if !self.validation_in_progress {
+            let mut payload = ValidateHash::new();
+            payload.content = message.payload.content;
+            payload.index = message.payload.index;
+            payload.nonce = message.payload.nonce;
+            payload.prev = message.payload.prev;
+            payload.timestamp = message.payload.timestamp;
+
+            let message = BlockchainProtocol::new()
+                .set_event_code(EventCodes::ValidateHash)
+                .set_payload(payload)
+                .build();
+
+            for peer in self.connected_peers_addr.clone() {
+                self.validation_in_progress = true;
+                udp.send_to(message.as_slice(), peer.parse::<SocketAddr>().unwrap()).unwrap();
+            }
+        }
+
+        Vec::new()
+    }
+
+    fn on_validated_hash(&mut self, udp: &UdpSocket, payload_buffer: Vec<u8>, _: String) -> Vec<u8> {
+        let message = BlockchainProtocol::<ValidatedHash>::from_vec(payload_buffer);
+        event!(format!("VALIDATED_HASH | {:?}", message));
+
+        if message.payload.index == self.current_block.index {
+            self.hashes.push(message.payload.hash);
+        }
+
+        if self.hashes.len() == self.connected_peers_addr.len() {
+            let mut hashes = HashMap::new();
+
+            for hash in self.hashes.clone() {
+                let updated_value = match hashes.get(&hash) {
+                    Some(current_val)   => current_val + 1,
+                    None                => 1
+                };
+
+                hashes.insert(hash, updated_value);
+            }
+
+            let mut result: (String, u64) = (String::from(""), 0);
+            for (key, value) in hashes {
+                if result.1 == 0 || value > result.1 {
+                    result.0 = key;
+                    result.1 = value;
+                }
+            }
+
+            self.hashes = Vec::new();
+            debug!(format!("Hash {} for block: {:?}", result.0, self.current_block));
+
+            self.current_block.hash = result.0;
+
+            let mut payload = FoundBlockPayload::new();
+            payload.content = self.current_block.content.clone();
+            payload.index = self.current_block.index;
+            payload.nonce = self.current_block.nonce;
+            payload.prev = self.current_block.prev.clone();
+            payload.timestamp = self.current_block.timestamp;
+            payload.hash = self.current_block.hash.clone();
+
+            let message = BlockchainProtocol::new()
+                .set_event_code(EventCodes::FoundBlock)
+                .set_payload(payload)
+                .build();
+
+            for peer in self.connected_peers_addr.clone() {
+                udp.send_to(message.as_slice(), peer.parse::<SocketAddr>().unwrap()).unwrap();
+            }
+
+            loop {
+                // for now every 2 minutes
+                if get_time().sec - self.last_block_time >= 120 {
+                    self.send_next_block(&udp);
+                    break;
+                }
+            }
+        }
+
+        Vec::new()
+    }
+
     fn on_ping(&self, _: Vec<u8>, _: String) -> Vec<u8> { Vec::new() }
     fn on_pong(&self, _: Vec<u8>, _: String) -> Vec<u8> { Vec::new() }
     fn on_ack_register(&self, _: Vec<u8>, _: String) -> Vec<u8> { Vec::new() }
     fn on_peer_registering(&self, _: Vec<u8>, _: String) -> Vec<u8> { Vec::new() }
     fn on_new_block(&self, _: Vec<u8>, _: String) -> Vec<u8> { Vec::new() }
-    fn on_possible_block(&self, _: Vec<u8>, _: String) -> Vec<u8> { Vec::new() }
+    fn on_validate_hash(&self, _: Vec<u8>, _: String) -> Vec<u8> { Vec::new() }
     fn on_found_block(&self, _: Vec<u8>, _: String) -> Vec<u8> { Vec::new() }
 }

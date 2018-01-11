@@ -3,30 +3,27 @@ use std::str;
 
 /// Model for the event `FoundBlock`
 #[derive(Debug, PartialEq)]
-pub struct FoundBlockPayload {
+pub struct ValidateHash {
     /// Index of the block
     pub index: u64,
     /// Content of the block
     pub content: String,
     /// Timestamp the block was created
     pub timestamp: i64,
-    /// Nonce for this block
-    pub nonce: u64,
     /// Hash of the previous block
     pub prev: String,
-    /// Hash of this block
-    pub hash: String
+    /// Nonce of the block
+    pub nonce: u64,
 }
 
-impl PayloadModel for FoundBlockPayload {
+impl PayloadModel for ValidateHash {
     fn new() -> Self {
         Self {
             index: 0,
             content: String::from(""),
             timestamp: 0,
-            nonce: 0,
             prev: String::from(""),
-            hash: String::from("")
+            nonce: 0
         }
     }
 
@@ -35,9 +32,8 @@ impl PayloadModel for FoundBlockPayload {
             index: String::from(str::from_utf8(bytes[0]).unwrap()).parse::<u64>().unwrap(),
             content: String::from(str::from_utf8(bytes[1]).unwrap()),
             timestamp: String::from(str::from_utf8(bytes[2]).unwrap()).parse::<i64>().unwrap(),
-            nonce: String::from(str::from_utf8(bytes[3]).unwrap()).parse::<u64>().unwrap(),
-            prev: String::from(str::from_utf8(bytes[4]).unwrap()),
-            hash: String::from(str::from_utf8(bytes[5]).unwrap()),
+            prev: String::from(str::from_utf8(bytes[3]).unwrap()),
+            nonce: String::from(str::from_utf8(bytes[4]).unwrap()).parse::<u64>().unwrap(),
         }
     }
 
@@ -66,23 +62,16 @@ impl PayloadModel for FoundBlockPayload {
         result.push(126);
 
         result.push(126);
-        for i in self.nonce.to_string().into_bytes() {
-            result.push(i);
-        }
-        result.push(126);
-
-        result.push(126);
         for i in self.prev.into_bytes() {
             result.push(i);
         }
         result.push(126);
 
         result.push(126);
-        for i in self.hash.into_bytes() {
+        for i in self.nonce.to_string().into_bytes() {
             result.push(i);
         }
         result.push(126);
-        
         result
     }
 }

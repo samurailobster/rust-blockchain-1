@@ -4,3 +4,4 @@ target/
 .idea
 
 connection_manager/peers
+peer/block_data

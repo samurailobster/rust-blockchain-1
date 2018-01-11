@@ -1,7 +1,8 @@
+use blockchain_file::blocks::Block;
 use blockchain_hooks::{EventCodes, Hooks};
 use blockchain_protocol::BlockchainProtocol;
 use blockchain_protocol::enums::status::StatusCodes;
-use blockchain_protocol::payload::{PingPayload, PongPayload, RegisterAckPayload, PeerRegisteringPayload, NewBlockPayload, PossibleBlockPayload};
+use blockchain_protocol::payload::{FoundBlockPayload, PingPayload, PongPayload, RegisterAckPayload, PeerRegisteringPayload, NewBlockPayload, PossibleBlockPayload, ValidateHash, ValidatedHash};
 use crypto::digest::Digest;
 use crypto::sha3::Sha3;
 use std::net::UdpSocket;
@@ -86,9 +87,46 @@ impl Hooks for HookHandlers {
         sending!(format!("POSSIBLE_BLOCK | {:?}", answer.payload));
         success!("Send block back.");
         answer.build()
-     }
+    }
 
-    fn on_register(&self, _: &UdpSocket, _: Vec<u8>, _: String) -> Vec<u8> { Vec::new() }
-    fn on_possible_block(&self, _: Vec<u8>, _: String) -> Vec<u8> { Vec::new() }
-    fn on_found_block(&self, _: Vec<u8>, _: String) -> Vec<u8> { Vec::new() }
+    fn on_validate_hash(&self, payload_buffer: Vec<u8>, _: String) -> Vec<u8> { 
+        let message = BlockchainProtocol::<ValidateHash>::from_vec(payload_buffer);
+        event!(format!("VALIDATE_HASH {:?}", message.payload));
+
+        let mut generated_block = String::from("");
+        generated_block.push_str(&message.payload.content);
+        generated_block.push_str(&message.payload.index.to_string());
+        generated_block.push_str(&message.payload.timestamp.to_string());
+        generated_block.push_str(&message.payload.prev);
+        generated_block.push_str(&message.payload.nonce.to_string());
+
+        let mut hasher = Sha3::sha3_256();
+        hasher.input_str(generated_block.as_str());
+
+        let mut answer = BlockchainProtocol::<ValidatedHash>::new().set_event_code(EventCodes::ValidatedHash);
+        answer.payload.index = message.payload.index;
+        answer.payload.hash = hasher.result_str();
+        answer.build()
+    }
+
+    fn on_found_block(&self, payload_buffer: Vec<u8>, _: String) -> Vec<u8> { 
+        let message = BlockchainProtocol::<FoundBlockPayload>::from_vec(payload_buffer);
+        event!(format!("FOUND_BLOCK {:?}", message.payload));
+
+        Block::init();
+        let mut block = Block::new();
+        block.index = message.payload.index;
+        block.content = message.payload.content;
+        block.timestamp = message.payload.timestamp;
+        block.nonce = message.payload.nonce;
+        block.prev = message.payload.prev;
+        block.hash = message.payload.hash;
+        block.save();
+
+        Vec::new()
+    }
+
+    fn on_register(&mut self, _: &UdpSocket, _: Vec<u8>, _: String) -> Vec<u8> { Vec::new() }
+    fn on_possible_block(&mut self, _: &UdpSocket, _: Vec<u8>, _: String) -> Vec<u8> { Vec::new() }
+    fn on_validated_hash(&mut self, _: &UdpSocket, _: Vec<u8>, _: String) -> Vec<u8> { Vec::new() }
 }
