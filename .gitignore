@@ -1,7 +1,9 @@
+.idea/**
 target/
-*/target/
+
 **/*.rs.bk
 .idea
+*.iml
 
 connection_manager/peers
 peer/block_data
